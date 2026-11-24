@@ -58,7 +58,7 @@ const DEF={tienda:'Spider Store',lema:'Hardware · Computadoras · Consolas',tel
 
 /* ===== estado y datos (Supabase) ===== */
 const S={cfg:{...DEF},ventas:[],proveedores:[],perfiles:[],mis:[]};
-let mf='todas';
+let mf='todas',cc=0;
 let sb=null,me=null,isAdmin=false,ready=false,view='vender',cTab='pend',vf='mes',af='todas',rp='mes',q='',D=null,mounted=null,curNota=null,curPdf=null,saving=false,authMsg='',liveTimer=null,rTimer=null,chan=null;
 const emailOf=u=>{u=String(u||'').trim().toLowerCase();return u.includes('@')?u:u+'@spiderstore.app'};
 const rowToVenta=r=>({id:r.id,num:r.num,fecha:r.fecha,hora:r.hora||'',cliente:r.cliente||'',doc:r.doc||'',tel:r.tel||'',metodo:r.metodo||'Efectivo',vendedor:r.vendedor||'',vid:r.vendedor_id,estado:r.estado,cobrado:n0(r.cobrado),obs:r.obs||'',cpct:r.comision_pct,cpag:!!r.comision_pagada,aprob:r.aprobacion,aprobNota:r.nota_admin||'',aprobEn:r.aprobada_en,
@@ -210,9 +210,18 @@ function comVenta(v){
   const c=calc(v);
   return {pct,monto:Math.max(0,c.gan)*pct/100,completa:c.sinCosto===0,pagada:!!v.cpag};
 }
+const cicloDia=()=>Math.min(28,Math.max(1,Math.round(n0(S.cfg.cicloDia))||16));
+function cicloIni(off){
+  const t=today(),d=cicloDia();let y=+t.slice(0,4),m=+t.slice(5,7);
+  if(+t.slice(8,10)<d)m--;
+  m+=off;while(m<1){m+=12;y--}while(m>12){m-=12;y++}
+  return y+'-'+pad2(m)+'-'+pad2(d);
+}
+function cicloRango(off){const a=cicloIni(off),b=addDays(cicloIni(off+1),-1);return {a,b,txt:fmtD(a)+' al '+fmtD(b)}}
+const inCom=v=>{if(cc==='todo')return true;const r=cicloRango(+cc);return (v.fecha||'')>=r.a&&(v.fecha||'')<=r.b};
 function comRows(){
   const m={};
-  S.ventas.filter(v=>v.aprob==='aprobada'&&inPeriod(v,rp)).forEach(v=>{
+  S.ventas.filter(v=>v.aprob==='aprobada'&&inCom(v)).forEach(v=>{
     const k=comVenta(v);if(!k)return;const pf=perfil(v.vid),c=calc(v);
     const r=m[v.vid]||(m[v.vid]={id:v.vid,nombre:(pf&&pf.nombre)||v.vendedor||'Vendedor',n:0,gan:0,monto:0,pagado:0,porPagar:0,inc:0,ids:[]});
     r.n++;r.gan+=Math.max(0,c.gan);r.monto+=k.monto;
@@ -552,8 +561,10 @@ async function payItems(pid,only){
 
 /* ===== RESUMEN ===== */
 function comCard(){
-  const R=comRows();if(!R.length)return '';
-  return '<div class="card"><h3 style="margin-bottom:6px">Comisiones de vendedores</h3>'+R.map(r=>'<div class="pi"><div class="row between"><b>'+esc(r.nombre)+'</b><span class="num">'+fmt(r.monto)+'</span></div><div class="mut small">'+r.n+' venta(s) aprobada(s) · ganancia '+fmt(r.gan)+'</div><div class="chips" style="margin-top:4px">'+(r.porPagar>0?'<span class="chip warn">Por pagar '+fmt(r.porPagar)+'</span>':'<span class="chip good">Al día</span>')+(r.pagado>0?'<span class="chip good">Pagado '+fmt(r.pagado)+'</span>':'')+(r.inc?'<span class="chip">'+r.inc+' con costo pendiente</span>':'')+'</div>'+(r.porPagar>0?'<div><button class="lnk" data-act="pay-com" data-id="'+esc(r.id)+'">Marcar como pagada</button></div>':'')+'</div>').join('')+'<div class="mut small" style="margin-top:6px">Comisión = porcentaje de la ganancia de cada venta aprobada. Solo se paga cuando la venta ya tiene todos sus costos aprobados.</div></div>';
+  const R=comRows(),opts=[0,-1,-2,-3,-4,-5].map(o=>'<option value="'+o+'"'+(String(cc)===String(o)?' selected':'')+'>'+(o===0?'Ciclo actual: ':o===-1?'Ciclo anterior: ':'Ciclo: ')+esc(cicloRango(o).txt)+'</option>').join('')+'<option value="todo"'+(cc==='todo'?' selected':'')+'>Todo el tiempo</option>';
+  const head='<div class="card"><h3 style="margin-bottom:6px">Comisiones de vendedores</h3><label class="f"><span>Ciclo de pago (cada mes, desde el '+cicloDia()+')</span><select id="ccsel">'+opts+'</select></label><div class="mut small" style="margin:4px 0 8px"><button class="lnk" data-act="ciclo-dia">Cambiar día de corte</button></div>';
+  if(!R.length)return head+'<div class="empty" style="padding:12px"><b>Sin comisiones en este ciclo</b>Aparecen cuando hay ventas aprobadas de un vendedor.</div></div>';
+  return head+R.map(r=>'<div class="pi"><div class="row between"><b>'+esc(r.nombre)+'</b><span class="num">'+fmt(r.monto)+'</span></div><div class="mut small">'+r.n+' venta(s) aprobada(s) · ganancia '+fmt(r.gan)+'</div><div class="chips" style="margin-top:4px">'+(r.porPagar>0?'<span class="chip warn">Por pagar '+fmt(r.porPagar)+'</span>':'<span class="chip good">Al día</span>')+(r.pagado>0?'<span class="chip good">Pagado '+fmt(r.pagado)+'</span>':'')+(r.inc?'<span class="chip">'+r.inc+' con costo pendiente</span>':'')+'</div>'+(r.porPagar>0?'<div><button class="lnk" data-act="pay-com" data-id="'+esc(r.id)+'">Marcar como pagada</button></div>':'')+'</div>').join('')+'<div class="mut small" style="margin-top:6px">Comisión = porcentaje de la ganancia de cada venta aprobada. Solo se paga cuando la venta ya tiene todos sus costos aprobados.</div></div>';
 }
 function vResumen(){
   const per=[['hoy','Hoy'],['sem','7 días'],['mes','Este mes'],['todo','Todo']];
@@ -1009,6 +1020,8 @@ document.addEventListener('click',e=>{
   if(a==='logout')return doLogout();
   if(a==='af'){af=d.p;mounted=null;render();return}
   if(a==='mf'){mf=d.p;mounted=null;render();return}
+  if(a==='ciclo-dia'){modal('<h2>Día de corte del pago</h2><form id="cd"><label class="f"><span>El ciclo mensual empieza el día</span><input name="d" type="number" min="1" max="28" step="1" inputmode="numeric" required value="'+cicloDia()+'"></label><div class="hint">Con 16, cada ciclo va del 16 de un mes al 15 del siguiente. Usa un día entre 1 y 28.</div><div class="actions"><button type="button" class="btn" data-act="close">Cancelar</button><button class="btn pri">Guardar</button></div></form>');
+    $('#cd').addEventListener('submit',ev=>{ev.preventDefault();const x=Math.round(n0(ev.target.elements.d.value));if(x<1||x>28){toast('Escribe un día entre 1 y 28');return}guard(async()=>{await setCfg({cicloDia:x});mounted=null;render();closeModal();toast('Día de corte guardado')})});return}
   if(a==='user-com'){const pf=perfil(d.id);if(!pf)return;
     modal('<h2>Comisión de '+esc(pf.nombre||pf.usuario)+'</h2><form id="cm"><label class="f"><span>Porcentaje de la ganancia (%)</span><input name="pct" type="number" min="0" max="100" step="any" inputmode="decimal" required value="'+n0(pf.comision_pct)+'"></label><div class="hint">Se aplica a las ventas nuevas. Las que ya registró conservan el porcentaje con el que se hicieron.</div><div class="actions"><button type="button" class="btn" data-act="close">Cancelar</button><button class="btn pri">Guardar</button></div></form>');
     $('#cm').addEventListener('submit',ev=>{ev.preventDefault();const x=n0(ev.target.elements.pct.value);if(x<0||x>100){toast('Escribe un porcentaje entre 0 y 100');return}
@@ -1064,6 +1077,7 @@ document.addEventListener('input',e=>{
 });
 document.addEventListener('change',e=>{
   const t=e.target;
+  if(t.id==='ccsel'){cc=t.value==='todo'?'todo':+t.value;mounted=null;render();return}
   if(t.id==='watel'&&curNota){curNota.tel=t.value.trim();const sv=S.ventas.find(x=>x.id===curNota.id);if(sv&&sv.tel!==curNota.tel)guard(async()=>{await put('ventas',{...sv,tel:curNota.tel})});return}
   if(view==='vender'&&mounted==='vender'){
     if(t.dataset.k==='reserva'){syncDraft();const r=$('#resv');if(r)r.hidden=D.estado!=='reservada';if(D.estado==='reservada'&&!n0(D.cobrado)){const c=calc({items:D.items,estado:'entregada'});D.cobrado=Math.round(c.total/2*100)/100;const ci=$('[data-k=cobrado]');if(ci)ci.value=D.cobrado}updateTotals();return}
