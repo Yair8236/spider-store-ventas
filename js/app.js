@@ -57,7 +57,7 @@ const COND0=[
 const DEF={tienda:'Spider Store',lema:'Hardware · Computadoras · Consolas',tel:'730-94025 · 758-77929',dir:'Uyustus, La Paz — Bolivia',horario:'Lunes a sábado, de 13:00 a 20:00',redes:'TikTok @spiderstoredx',vendedor:'',garantia:12,cond:''};
 
 /* ===== estado y datos (Supabase) ===== */
-const S={cfg:{...DEF},ventas:[],proveedores:[],perfiles:[],mis:[]};
+const S={cfg:{...DEF},ventas:[],proveedores:[],perfiles:[],mis:[],res:{meta:0,pct:0,dias:[]}};
 let mf='todas',cc=0;
 let sb=null,me=null,isAdmin=false,ready=false,view='vender',cTab='pend',vf='mes',af='todas',rp='mes',q='',D=null,mounted=null,curNota=null,curPdf=null,saving=false,authMsg='',liveTimer=null,rTimer=null,chan=null;
 const emailOf=u=>{u=String(u||'').trim().toLowerCase();return u.includes('@')?u:u+'@spiderstore.app'};
@@ -82,9 +82,10 @@ async function loadAll(){
   }else{
     S.ventas=[];S.perfiles=[];
     const mv=await sb.rpc('mis_ventas');if(mv.error)throw mv.error;S.mis=mv.data||[];
+    const rs=await sb.rpc('mi_resumen');if(!rs.error&&rs.data)S.res=rs.data;
   }
 }
-async function refresh(quiet){try{await loadAll();render()}catch(e){if(!quiet)toast('No se pudo actualizar: '+((e&&e.message)||'sin conexión'))}}
+async function refresh(quiet){try{await loadAll();render();updMini()}catch(e){if(!quiet)toast('No se pudo actualizar: '+((e&&e.message)||'sin conexión'))}}
 function scheduleRefresh(){clearTimeout(rTimer);rTimer=setTimeout(()=>refresh(true),700)}
 function startLive(){
   stopLive();
@@ -155,7 +156,7 @@ async function doLogin(u,p){
 }
 async function doLogout(){
   stopLive();try{await sb.auth.signOut()}catch(e){}
-  me=null;isAdmin=false;S.ventas=[];S.proveedores=[];S.perfiles=[];S.mis=[];D=null;curNota=null;closeModal();authMsg='';mounted=null;render();
+  me=null;isAdmin=false;S.ventas=[];S.proveedores=[];S.perfiles=[];S.mis=[];S.res={meta:0,pct:0,dias:[]};D=null;curNota=null;closeModal();authMsg='';mounted=null;render();
 }
 async function boot(){
   renderTop();render();
@@ -252,7 +253,7 @@ const IC={
 };
 const ico=n=>'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+IC[n]+'</svg>';
 const NAV_A=[['vender','Vender','plus'],['ventas','Ventas','receipt'],['costos','Costos','truck'],['resumen','Resumen','chart'],['ajustes','Ajustes','cog']];
-const NAV_V=[['vender','Vender','plus'],['misventas','Mis ventas','receipt'],['prov','Proveedores','truck']];
+const NAV_V=[['vender','Vender','plus'],['misventas','Mis ventas','receipt'],['mimeta','Mi meta','chart'],['prov','Proveedores','truck']];
 const navList=()=>isAdmin?NAV_A:NAV_V;
 const pendAprob=()=>S.ventas.filter(v=>v.aprob==='pendiente').length;
 function renderNav(){
@@ -305,7 +306,7 @@ function render(){
   if(once&&mounted===view)return;
   if(view==='ventas'&&mounted==='ventas'&&document.activeElement&&document.activeElement.id==='q'){const l=$('#vlist');if(l)l.innerHTML=listVentas();return}
   mounted=view;
-  el.innerHTML=view==='vender'?vVender():view==='ventas'?vVentas():view==='costos'?vCostos():view==='resumen'?vResumen():view==='prov'?vProvVend():view==='misventas'?vMisVentas():vAjustes();
+  el.innerHTML=view==='vender'?vVender():view==='ventas'?vVentas():view==='costos'?vCostos():view==='resumen'?vResumen():view==='prov'?vProvVend():view==='misventas'?vMisVentas():view==='mimeta'?vMiMeta():vAjustes();
   if(view==='vender')updateTotals();
 }
 
@@ -353,6 +354,50 @@ function openMiCosto(vid,k){
     if(pago!=='propio'&&!pid){toast('Elige el proveedor');return}
     guard(async()=>{const r=await sb.rpc('proponer_costo',{p_item:i.id,p_costo:costo,p_prov:pago==='propio'?null:pid,p_pago:pago});if(r.error)throw r.error;await refresh(true);closeModal();toast('Costo enviado a revisión')})});
 }
+
+/* ===== META DEL VENDEDOR ===== */
+function metaData(){
+  const R=S.res||{meta:0,pct:0,dias:[]},map={};(R.dias||[]).forEach(d=>{map[d.fecha]={conf:Math.max(0,n0(d.conf)),est:Math.max(0,n0(d.est)),sin:n0(d.sin)}});
+  const g=f=>map[f]||{conf:0,est:0,sin:0},meta=n0(R.meta),t=today(),h=g(t);
+  const tot=f=>g(f).conf+g(f).est;
+  let racha=0;for(let k=tot(t)>=meta&&meta>0?0:1;meta>0;k++){if(tot(addDays(t,-k))>=meta)racha++;else break;if(k>60)break}
+  const semana=[];for(let k=6;k>=0;k--){const f=addDays(t,-k);semana.push({f,...g(f)})}
+  const ini=cicloIni(0);let cConf=0,cEst=0,cumpl=0,dias=0;
+  for(let f=ini;f<=t;f=addDays(f,1)){const x=g(f);cConf+=x.conf;cEst+=x.est;dias++;if(meta>0&&x.conf+x.est>=meta)cumpl++}
+  return {meta,pct:n0(R.pct),h,semana,racha,cConf,cEst,cumpl,dias,ini,sin:h.sin};
+}
+function metaMsg(p,falta,extra){
+  if(p>=1.5)return '¡Increíble! Superaste la meta por Bs '+fmt(extra).replace('Bs ','');
+  if(p>=1)return '¡Meta cumplida! Llevas Bs '+fmt(extra).replace('Bs ','')+' de más';
+  if(p>=.75)return '¡Casi lo logras! Te faltan solo '+fmt(falta);
+  if(p>=.5)return '¡Ya pasaste la mitad! Te faltan '+fmt(falta);
+  if(p>0)return 'Buen comienzo, sigue así. Te faltan '+fmt(falta);
+  return 'Hoy aún no hay ventas. ¡A por la meta!';
+}
+function miniMeta(){
+  const m=metaData();if(!(m.meta>0))return '';
+  const a=m.h.conf,b=m.h.conf+m.h.est,pc=Math.min(100,a/m.meta*100),pe=Math.min(100,b/m.meta*100);
+  return '<button class="vc" id="mini" data-act="nav" data-v="mimeta" style="margin-bottom:12px"><div class="vh"><b>Meta de hoy</b><span class="num">'+fmt(b)+' / '+fmt(m.meta)+'</span></div><div class="mbar"><i style="width:'+pe+'%;background:var(--blue)"></i><i style="width:'+pc+'%;background:var(--good)"></i></div><div class="mut small">'+(b>=m.meta?'¡Meta cumplida!':'Te faltan '+fmt(m.meta-b))+' · toca para ver tu resumen</div></button>';
+}
+function updMini(){const el=$('#mini');if(!el||isAdmin)return;const t=document.createElement('div');t.innerHTML=miniMeta();if(t.firstChild)el.replaceWith(t.firstChild)}
+function vMiMeta(){
+  const m=metaData();
+  if(!(m.meta>0))return '<div class="head"><h1>Mi meta</h1><p>El administrador aún no te asignó una meta diaria.</p></div>';
+  const a=m.h.conf,b=m.h.conf+m.h.est,p=b/m.meta,R=52,C=2*Math.PI*R;
+  const ring='<svg viewBox="0 0 140 140" width="170" height="170" role="img" aria-label="Avance de la meta"><circle cx="70" cy="70" r="'+R+'" fill="none" stroke="var(--line)" stroke-width="14"/><circle cx="70" cy="70" r="'+R+'" fill="none" stroke="var(--blue)" stroke-width="14" stroke-linecap="round" stroke-dasharray="'+(C*Math.min(1,p))+' '+C+'" transform="rotate(-90 70 70)"/><circle cx="70" cy="70" r="'+R+'" fill="none" stroke="var(--good)" stroke-width="14" stroke-linecap="round" stroke-dasharray="'+(C*Math.min(1,a/m.meta))+' '+C+'" transform="rotate(-90 70 70)"/><text x="70" y="68" text-anchor="middle" fill="var(--ink)" font-size="26" font-weight="700">'+Math.round(p*100)+'%</text><text x="70" y="88" text-anchor="middle" fill="var(--mut)" font-size="11">de la meta</text></svg>';
+  const mx=Math.max(m.meta,...m.semana.map(x=>x.conf+x.est),1);
+  const bars=m.semana.map(x=>{const v=x.conf+x.est,ok=v>=m.meta,dia=parseD(x.f).toLocaleDateString('es-BO',{weekday:'narrow'}).toUpperCase();
+    return '<div style="flex:1;text-align:center"><div style="height:80px;display:flex;align-items:flex-end;justify-content:center;position:relative"><div title="'+esc(fmtD(x.f))+': '+esc(fmt(v))+'" style="width:70%;height:'+Math.max(3,v/mx*100)+'%;background:'+(ok?'var(--good)':'var(--blue)')+';border-radius:6px 6px 2px 2px;opacity:'+(x.f===today()?1:.8)+'"></div></div><div class="mut small">'+dia+'</div></div>'}).join('');
+  const lineY=100-m.meta/mx*100;
+  const com=m.cConf*m.pct/100,comE=(m.cConf+m.cEst)*m.pct/100;
+  return '<div class="head"><h1>Mi meta</h1><p>Tu meta de hoy es generar <b>'+fmt(m.meta)+'</b> de ganancia.</p></div>'+
+  '<div class="card" style="text-align:center">'+ring+'<div style="font-size:1.15rem;font-weight:600;margin-top:4px">'+esc(metaMsg(p,m.meta-b,b-m.meta))+'</div>'+
+  '<div class="chips" style="justify-content:center;margin-top:8px"><span class="chip good">Confirmado '+fmt(a)+'</span>'+(m.h.est>0?'<span class="chip" style="color:var(--blue2)">En revisión '+fmt(m.h.est)+'</span>':'')+(m.sin?'<span class="chip warn">'+m.sin+' producto(s) sin costo</span>':'')+'</div>'+
+  '<div class="mut small" style="margin-top:8px">Lo confirmado es de ventas ya aprobadas por el administrador. Lo que está en revisión cuenta en la barra, pero puede cambiar al aprobarse.</div></div>'+
+  '<div class="card"><h3 style="margin-bottom:8px">Últimos 7 días</h3><div style="display:flex;gap:6px;position:relative;align-items:flex-end">'+bars+'</div><div class="mut small" style="margin-top:6px">Verde: día con meta cumplida · azul: aún por debajo de '+fmt(m.meta)+'</div></div>'+
+  '<div class="stats"><div class="stat"><small>Racha de días con meta</small><span class="num good">'+m.racha+'</span></div><div class="stat"><small>Días cumplidos en este ciclo</small><span class="num">'+m.cumpl+' / '+m.dias+'</span></div><div class="stat"><small>Ganancia del ciclo</small><span class="num">'+fmt(m.cConf+m.cEst)+'</span></div><div class="stat"><small>Tu comisión ('+m.pct+' %)</small><span class="num good">'+fmt(com)+'</span></div></div>'+
+  '<div class="hint">El ciclo de pago empezó el '+fmtD(m.ini)+'. Tu comisión confirmada es '+fmt(com)+(comE>com?'; si se aprueba todo lo que está en revisión sería '+fmt(comE):'')+'.</div>';
+}
 function vProvVend(){
   const L=S.proveedores.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
   return '<div class="head"><h1>Proveedores</h1><p>Registra aquí los proveedores nuevos que consigas. Quedan por revisión hasta que el administrador los apruebe; solo él puede modificarlos o borrarlos.</p></div>'+
@@ -379,7 +424,7 @@ function itemHtml(i,k){
 }
 function vVender(){
   const d=D;
-  return '<div class="head"><h1>'+(d.id?'Editar venta <span class="num mut" style="font-size:1.1rem">#'+pad4(d.num)+'</span>':'Nueva venta')+'</h1><p>'+(isAdmin?'Producto, serie y precio. El proveedor y el costo son opcionales: puedes completarlos después en Costos.':'Registra producto, serie y precio. Si conseguiste el producto en otro lado, anota su costo y proveedor: el administrador los revisa y aprueba la venta.')+'</p></div>'+
+  return (isAdmin?'':miniMeta())+'<div class="head"><h1>'+(d.id?'Editar venta <span class="num mut" style="font-size:1.1rem">#'+pad4(d.num)+'</span>':'Nueva venta')+'</h1><p>'+(isAdmin?'Producto, serie y precio. El proveedor y el costo son opcionales: puedes completarlos después en Costos.':'Registra producto, serie y precio. Si conseguiste el producto en otro lado, anota su costo y proveedor: el administrador los revisa y aprueba la venta.')+'</p></div>'+
   '<div class="card"><div class="g2"><label class="f"><span>Cliente</span><input data-k="cliente" value="'+esc(d.cliente)+'" placeholder="Nombre del cliente"></label>'+
   '<label class="f"><span>CI / NIT (opcional)</span><input data-k="doc" value="'+esc(d.doc)+'" inputmode="numeric"></label>'+
   '<label class="f"><span>Celular (WhatsApp)</span><input data-k="tel" value="'+esc(d.tel)+'" inputmode="tel" placeholder="Ej. 730-94025"></label>'+
@@ -627,7 +672,7 @@ function usersCard(){
   return '<div class="card"><div class="row between"><h3>Cuentas y roles</h3><button class="btn pri sm" data-act="new-user">+ Nueva cuenta</button></div>'+
   '<p class="mut small" style="margin:4px 0 8px"><b>Administrador:</b> ve y modifica todo y aprueba las ventas. <b>Vendedor:</b> solo registra ventas y proveedores nuevos; no ve ni modifica registros.</p>'+
   L.map(p=>'<div class="pi"><div class="row between"><b>'+esc(p.nombre||p.usuario)+'</b><span class="row" style="gap:6px"><span class="chip '+(p.rol==='admin'?'good':'')+'">'+(p.rol==='admin'?'Administrador':'Vendedor')+'</span>'+(p.activo?'':'<span class="chip red">Desactivada</span>')+'</span></div>'+
-    '<div class="mut small">Usuario: '+esc(p.usuario)+'</div>'+(p.rol==='vendedor'?'<div class="mut small">Comisión: <b>'+n0(p.comision_pct)+' %</b> de la ganancia <button class="lnk" data-act="user-com" data-id="'+esc(p.id)+'">Cambiar</button></div>':'')+
+    '<div class="mut small">Usuario: '+esc(p.usuario)+'</div>'+(p.rol==='vendedor'?'<div class="mut small">Comisión: <b>'+n0(p.comision_pct)+' %</b> de la ganancia <button class="lnk" data-act="user-com" data-id="'+esc(p.id)+'">Cambiar</button></div><div class="mut small">Meta diaria: <b>Bs '+n0(p.meta_diaria)+'</b> de ganancia <button class="lnk" data-act="user-meta" data-id="'+esc(p.id)+'">Cambiar</button></div>':'')+
     (p.id===me.id?'<div class="mut small">Esta eres tú (cambia tu clave en tu cuenta).</div>':'<div class="row" style="gap:4px;margin-top:2px"><button class="lnk" data-act="user-pass" data-id="'+esc(p.id)+'">Cambiar clave</button><button class="lnk" data-act="user-role" data-id="'+esc(p.id)+'">Hacer '+(p.rol==='admin'?'vendedor':'administrador')+'</button><button class="lnk '+(p.activo?'bad':'')+'" data-act="user-toggle" data-id="'+esc(p.id)+'">'+(p.activo?'Desactivar':'Activar')+'</button></div>')+'</div>').join('')+'</div>';
 }
 function newUserForm(){
@@ -1020,6 +1065,10 @@ document.addEventListener('click',e=>{
   if(a==='logout')return doLogout();
   if(a==='af'){af=d.p;mounted=null;render();return}
   if(a==='mf'){mf=d.p;mounted=null;render();return}
+  if(a==='user-meta'){const pf=perfil(d.id);if(!pf)return;
+    modal('<h2>Meta diaria de '+esc(pf.nombre||pf.usuario)+'</h2><form id="mm"><label class="f"><span>Ganancia que debe generar por día (Bs)</span><input name="m" type="number" min="0" step="any" inputmode="decimal" required value="'+n0(pf.meta_diaria)+'"></label><div class="hint">Con 0 no se muestra meta. Él ve su avance y el total de ganancia, nunca los costos de cada producto.</div><div class="actions"><button type="button" class="btn" data-act="close">Cancelar</button><button class="btn pri">Guardar</button></div></form>');
+    $('#mm').addEventListener('submit',ev=>{ev.preventDefault();const x=n0(ev.target.elements.m.value);if(x<0){toast('La meta no puede ser negativa');return}
+      guard(async()=>{const r=await sb.from('perfiles').update({meta_diaria:x}).eq('id',d.id);if(r.error)throw r.error;await loadAll();mounted=null;render();closeModal();toast('Meta guardada')})});return}
   if(a==='ciclo-dia'){modal('<h2>Día de corte del pago</h2><form id="cd"><label class="f"><span>El ciclo mensual empieza el día</span><input name="d" type="number" min="1" max="28" step="1" inputmode="numeric" required value="'+cicloDia()+'"></label><div class="hint">Con 16, cada ciclo va del 16 de un mes al 15 del siguiente. Usa un día entre 1 y 28.</div><div class="actions"><button type="button" class="btn" data-act="close">Cancelar</button><button class="btn pri">Guardar</button></div></form>');
     $('#cd').addEventListener('submit',ev=>{ev.preventDefault();const x=Math.round(n0(ev.target.elements.d.value));if(x<1||x>28){toast('Escribe un día entre 1 y 28');return}guard(async()=>{await setCfg({cicloDia:x});mounted=null;render();closeModal();toast('Día de corte guardado')})});return}
   if(a==='user-com'){const pf=perfil(d.id);if(!pf)return;

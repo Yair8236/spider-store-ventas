@@ -106,3 +106,4 @@ table.t{width:100%;border-collapse:collapse;min-width:420px}
 @media (min-width:900px){body{font-size:16px}.wrap{max-width:1040px}}
 
 .cst{margin-top:10px}.cst summary{cursor:pointer;color:var(--mut);font-size:.9rem;padding:4px 0}
+.mbar{height:10px;border-radius:99px;background:var(--line);position:relative;overflow:hidden;margin:8px 0 6px}.mbar i{position:absolute;left:0;top:0;bottom:0;border-radius:99px}
