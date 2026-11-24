@@ -61,7 +61,7 @@ const S={cfg:{...DEF},ventas:[],proveedores:[],perfiles:[],mis:[]};
 let mf='todas';
 let sb=null,me=null,isAdmin=false,ready=false,view='vender',cTab='pend',vf='mes',af='todas',rp='mes',q='',D=null,mounted=null,curNota=null,curPdf=null,saving=false,authMsg='',liveTimer=null,rTimer=null,chan=null;
 const emailOf=u=>{u=String(u||'').trim().toLowerCase();return u.includes('@')?u:u+'@spiderstore.app'};
-const rowToVenta=r=>({id:r.id,num:r.num,fecha:r.fecha,hora:r.hora||'',cliente:r.cliente||'',doc:r.doc||'',tel:r.tel||'',metodo:r.metodo||'Efectivo',vendedor:r.vendedor||'',vid:r.vendedor_id,estado:r.estado,cobrado:n0(r.cobrado),obs:r.obs||'',aprob:r.aprobacion,aprobNota:r.nota_admin||'',aprobEn:r.aprobada_en,
+const rowToVenta=r=>({id:r.id,num:r.num,fecha:r.fecha,hora:r.hora||'',cliente:r.cliente||'',doc:r.doc||'',tel:r.tel||'',metodo:r.metodo||'Efectivo',vendedor:r.vendedor||'',vid:r.vendedor_id,estado:r.estado,cobrado:n0(r.cobrado),obs:r.obs||'',cpct:r.comision_pct,cpag:!!r.comision_pagada,aprob:r.aprobacion,aprobNota:r.nota_admin||'',aprobEn:r.aprobada_en,
   items:(r.venta_items||[]).slice().sort((a,b)=>a.orden-b.orden).map(i=>({id:i.id,cat:i.cat,desc:i.descr,serie:i.serie||'',qty:i.qty,precio:n0(i.precio),garantia:i.garantia,costo:n0(i.costo),prov:i.prov_id||'',pago:i.pago,liquidado:!!i.liquidado,est:i.costo_estado||'sin_costo'}))});
 const itemRow=(i,vid,k)=>({venta_id:vid,orden:k,cat:i.cat||'Otro',descr:i.desc,serie:i.serie||'',qty:Math.max(1,Math.round(n0(i.qty))||1),precio:n0(i.precio),garantia:Math.max(0,Math.round(n0(i.garantia))),costo:n0(i.costo),prov_id:i.prov||null,pago:i.pago||'pagado',liquidado:!!i.liquidado,costo_estado:i.est||(n0(i.costo)>0&&(i.pago==='propio'||i.prov)?'oficial':'sin_costo')});
 async function loadAll(){
@@ -201,6 +201,24 @@ function provStats(pid){
   let n=0,compras=0,deuda=0,venta=0;
   S.ventas.forEach(v=>(v.items||[]).forEach(i=>{if(i.prov===pid&&itemDone(i)){const q2=n0(i.qty);n+=q2;compras+=q2*n0(i.costo);venta+=q2*n0(i.precio);if(i.pago==='debo'&&!i.liquidado)deuda+=q2*n0(i.costo)}}));
   return {n,compras,deuda,gan:venta-compras};
+}
+const perfil=id=>S.perfiles.find(p=>p.id===id);
+function comVenta(v){
+  const pf=perfil(v.vid);
+  const pct=v.cpct!=null?n0(v.cpct):(pf&&pf.rol==='vendedor'?n0(pf.comision_pct):0);
+  if(!(pct>0))return null;
+  const c=calc(v);
+  return {pct,monto:Math.max(0,c.gan)*pct/100,completa:c.sinCosto===0,pagada:!!v.cpag};
+}
+function comRows(){
+  const m={};
+  S.ventas.filter(v=>v.aprob==='aprobada'&&inPeriod(v,rp)).forEach(v=>{
+    const k=comVenta(v);if(!k)return;const pf=perfil(v.vid),c=calc(v);
+    const r=m[v.vid]||(m[v.vid]={id:v.vid,nombre:(pf&&pf.nombre)||v.vendedor||'Vendedor',n:0,gan:0,monto:0,pagado:0,porPagar:0,inc:0,ids:[]});
+    r.n++;r.gan+=Math.max(0,c.gan);r.monto+=k.monto;
+    if(!k.completa)r.inc++;else if(k.pagada)r.pagado+=k.monto;else{r.porPagar+=k.monto;r.ids.push(v.id)}
+  });
+  return Object.values(m);
 }
 function inPeriod(v,p){
   const t=today(),d=v.fecha||'';
@@ -449,7 +467,7 @@ function openVenta(id){
   const left='<div class="scroll"><table class="t"><thead><tr><th>Cant.</th><th>Producto</th><th class="r">P. unit.</th><th class="r">Subtotal</th></tr></thead><tbody>'+(v.items||[]).map(i=>'<tr><td>'+n0(i.qty)+'</td><td><b>'+esc(i.desc)+'</b><div class="mut small">'+esc(i.cat)+(i.serie?' · S/N <span class="num">'+esc(i.serie)+'</span>':'')+'</div>'+((g=>g?'<div class="small '+(g.vigente?'good':'bad')+'">'+(g.vigente?'Garantía hasta ':'Venció el ')+fmtD(g.hasta)+'</div>':'')(gHasta(v,i)))+'</td><td class="r num">'+fmt(i.precio)+'</td><td class="r num">'+fmt(itemSub(i))+'</td></tr>').join('')+'</tbody></table></div>'+
    '<div class="row between" style="margin-top:10px"><span class="mut">Total</span><b class="num" style="font-size:1.3rem">'+fmt(c.total)+'</b></div>'+
    (v.estado==='reservada'?'<div class="row between"><span class="mut">Cobrado</span><span class="num">'+fmt(c.cobrado)+'</span></div><div class="row between"><span class="mut">Saldo por cobrar</span><b class="num warnc">'+fmt(c.saldo)+'</b></div>':'')+
-   '<div class="row between" style="margin-top:6px"><span class="mut">Ganancia (con costo cargado)</span><b class="num good">'+fmt(c.gan)+'</b></div>';
+   '<div class="row between" style="margin-top:6px"><span class="mut">Ganancia (con costo cargado)</span><b class="num good">'+fmt(c.gan)+'</b></div>'+((k=>k?'<div class="row between"><span class="mut">Comisión de '+esc(v.vendedor||'vendedor')+' ('+k.pct+' %)</span><b class="num">'+fmt(k.monto)+'</b></div><div class="row" style="justify-content:flex-end">'+(!k.completa?'<span class="chip">Se define cuando estén todos los costos</span>':k.pagada?'<span class="chip good">Pagada</span>':v.aprob==='aprobada'?'<span class="chip warn">Por pagar</span>':'<span class="chip warn">Se paga al aprobar la venta</span>')+'</div>':'')(comVenta(v)));
   const side='<aside class="side"><h3 style="margin-bottom:6px">Proveedor y costos</h3>'+(v.items||[]).map((i,k)=>{
     const p=prov(i.prov),done=itemDone(i),rv=itemRev(i);
     return '<div class="pi"><b>'+esc(i.desc)+'</b>'+(done?'<div>'+(i.pago==='propio'?'Stock propio':esc(p?p.nombre:'Proveedor'))+(p&&p.telefono?' <span class="mut num small">'+esc(p.telefono)+'</span>':'')+'</div><div class="mut small">Costo '+fmt(n0(i.qty)*n0(i.costo))+' · ganancia '+fmt(itemSub(i)-n0(i.qty)*n0(i.costo))+'</div><div style="margin-top:4px"><span class="chip '+(i.pago==='debo'&&!i.liquidado?'red':'good')+'">'+(i.pago==='debo'?(i.liquidado?'Pagado':'Debo'):PAGOS[i.pago])+'</span></div>':(rv?'<div>'+(i.pago==='propio'?'Stock propio':esc(p?p.nombre:'Proveedor'))+'</div><div class="mut small">Costo propuesto '+fmt(n0(i.qty)*n0(i.costo))+' · ganancia '+fmt(itemSub(i)-n0(i.qty)*n0(i.costo))+'</div><div style="margin-top:4px"><span class="chip warn">Por revisión</span></div>':'<span class="chip warn">Falta proveedor y costo</span>'))+
@@ -533,6 +551,10 @@ async function payItems(pid,only){
 }
 
 /* ===== RESUMEN ===== */
+function comCard(){
+  const R=comRows();if(!R.length)return '';
+  return '<div class="card"><h3 style="margin-bottom:6px">Comisiones de vendedores</h3>'+R.map(r=>'<div class="pi"><div class="row between"><b>'+esc(r.nombre)+'</b><span class="num">'+fmt(r.monto)+'</span></div><div class="mut small">'+r.n+' venta(s) aprobada(s) · ganancia '+fmt(r.gan)+'</div><div class="chips" style="margin-top:4px">'+(r.porPagar>0?'<span class="chip warn">Por pagar '+fmt(r.porPagar)+'</span>':'<span class="chip good">Al día</span>')+(r.pagado>0?'<span class="chip good">Pagado '+fmt(r.pagado)+'</span>':'')+(r.inc?'<span class="chip">'+r.inc+' con costo pendiente</span>':'')+'</div>'+(r.porPagar>0?'<div><button class="lnk" data-act="pay-com" data-id="'+esc(r.id)+'">Marcar como pagada</button></div>':'')+'</div>').join('')+'<div class="mut small" style="margin-top:6px">Comisión = porcentaje de la ganancia de cada venta aprobada. Solo se paga cuando la venta ya tiene todos sus costos aprobados.</div></div>';
+}
 function vResumen(){
   const per=[['hoy','Hoy'],['sem','7 días'],['mes','Este mes'],['todo','Todo']];
   const APR=S.ventas.filter(v=>v.aprob==='aprobada'),V=APR.filter(v=>inPeriod(v,rp));
@@ -560,6 +582,7 @@ function vResumen(){
   tbl('Por categoría',cats,[['v','Venta'],['g','Ganancia'],['u','Unid.','n']])+
   tbl('Por proveedor',provs,[['c','Compras'],['g','Ganancia']])+
   tbl('Por forma de pago',met,[['t','Venta']])+
+  comCard()+
   '<div class="actions" style="justify-content:flex-start"><button class="btn blue" data-act="csv">Descargar ventas (CSV para Excel)</button></div>';
 }
 /* ===== guardar / compartir archivos ===== */
@@ -593,7 +616,7 @@ function usersCard(){
   return '<div class="card"><div class="row between"><h3>Cuentas y roles</h3><button class="btn pri sm" data-act="new-user">+ Nueva cuenta</button></div>'+
   '<p class="mut small" style="margin:4px 0 8px"><b>Administrador:</b> ve y modifica todo y aprueba las ventas. <b>Vendedor:</b> solo registra ventas y proveedores nuevos; no ve ni modifica registros.</p>'+
   L.map(p=>'<div class="pi"><div class="row between"><b>'+esc(p.nombre||p.usuario)+'</b><span class="row" style="gap:6px"><span class="chip '+(p.rol==='admin'?'good':'')+'">'+(p.rol==='admin'?'Administrador':'Vendedor')+'</span>'+(p.activo?'':'<span class="chip red">Desactivada</span>')+'</span></div>'+
-    '<div class="mut small">Usuario: '+esc(p.usuario)+'</div>'+
+    '<div class="mut small">Usuario: '+esc(p.usuario)+'</div>'+(p.rol==='vendedor'?'<div class="mut small">Comisión: <b>'+n0(p.comision_pct)+' %</b> de la ganancia <button class="lnk" data-act="user-com" data-id="'+esc(p.id)+'">Cambiar</button></div>':'')+
     (p.id===me.id?'<div class="mut small">Esta eres tú (cambia tu clave en tu cuenta).</div>':'<div class="row" style="gap:4px;margin-top:2px"><button class="lnk" data-act="user-pass" data-id="'+esc(p.id)+'">Cambiar clave</button><button class="lnk" data-act="user-role" data-id="'+esc(p.id)+'">Hacer '+(p.rol==='admin'?'vendedor':'administrador')+'</button><button class="lnk '+(p.activo?'bad':'')+'" data-act="user-toggle" data-id="'+esc(p.id)+'">'+(p.activo?'Desactivar':'Activar')+'</button></div>')+'</div>').join('')+'</div>';
 }
 function newUserForm(){
@@ -986,6 +1009,13 @@ document.addEventListener('click',e=>{
   if(a==='logout')return doLogout();
   if(a==='af'){af=d.p;mounted=null;render();return}
   if(a==='mf'){mf=d.p;mounted=null;render();return}
+  if(a==='user-com'){const pf=perfil(d.id);if(!pf)return;
+    modal('<h2>Comisión de '+esc(pf.nombre||pf.usuario)+'</h2><form id="cm"><label class="f"><span>Porcentaje de la ganancia (%)</span><input name="pct" type="number" min="0" max="100" step="any" inputmode="decimal" required value="'+n0(pf.comision_pct)+'"></label><div class="hint">Se aplica a las ventas nuevas. Las que ya registró conservan el porcentaje con el que se hicieron.</div><div class="actions"><button type="button" class="btn" data-act="close">Cancelar</button><button class="btn pri">Guardar</button></div></form>');
+    $('#cm').addEventListener('submit',ev=>{ev.preventDefault();const x=n0(ev.target.elements.pct.value);if(x<0||x>100){toast('Escribe un porcentaje entre 0 y 100');return}
+      guard(async()=>{const r=await sb.from('perfiles').update({comision_pct:x}).eq('id',d.id);if(r.error)throw r.error;await loadAll();mounted=null;render();closeModal();toast('Comisión guardada')})});return}
+  if(a==='pay-com'){const r=comRows().find(x=>x.id===d.id);if(!r||!r.ids.length)return;
+    modal('<h2>¿Marcar como pagada?</h2><p class="mut">Comisión de <b>'+esc(r.nombre)+'</b> por <b>'+fmt(r.porPagar)+'</b> ('+r.ids.length+' venta(s)). Esto solo lo registra; no mueve dinero.</p><div class="actions"><button class="btn" data-act="close">Cancelar</button><button class="btn ok" id="yes">Sí, ya la pagué</button></div>');
+    $('#yes').addEventListener('click',()=>guard(async()=>{const u=await sb.from('ventas').update({comision_pagada:true,comision_pagada_en:new Date().toISOString()}).in('id',r.ids);if(u.error)throw u.error;await refresh(true);closeModal();toast('Comisión registrada como pagada')}));return}
   if(a==='open-mia')return openMia(d.id);
   if(a==='mi-costo'){closeModal();return openMiCosto(d.v,d.i)}
   if(a==='aprobar-costos')return guard(async()=>{const r=await sb.from('venta_items').update({costo_estado:'oficial'}).eq('venta_id',d.id).eq('costo_estado','revision');if(r.error)throw r.error;await refresh(true);closeModal();toast('Costos aprobados')});
