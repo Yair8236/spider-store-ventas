@@ -1,0 +1,4 @@
+-- 003: historial del vendedor (mis_ventas) y propuesta de costos (proponer_costo).
+-- Ya aplicada en la base actual. Ver la definicion vigente en Supabase.
+-- mis_ventas(): devuelve solo las ventas del usuario, sin costos oficiales.
+-- proponer_costo(item, costo, proveedor, pago): solo en productos propios y no aprobados; queda 'revision'.

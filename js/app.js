@@ -57,7 +57,8 @@ const COND0=[
 const DEF={tienda:'Spider Store',lema:'Hardware · Computadoras · Consolas',tel:'730-94025 · 758-77929',dir:'Uyustus, La Paz — Bolivia',horario:'Lunes a sábado, de 13:00 a 20:00',redes:'TikTok @spiderstoredx',vendedor:'',garantia:12,cond:''};
 
 /* ===== estado y datos (Supabase) ===== */
-const S={cfg:{...DEF},ventas:[],proveedores:[],perfiles:[]};
+const S={cfg:{...DEF},ventas:[],proveedores:[],perfiles:[],mis:[]};
+let mf='todas';
 let sb=null,me=null,isAdmin=false,ready=false,view='vender',cTab='pend',vf='mes',af='todas',rp='mes',q='',D=null,mounted=null,curNota=null,curPdf=null,saving=false,authMsg='',liveTimer=null,rTimer=null,chan=null;
 const emailOf=u=>{u=String(u||'').trim().toLowerCase();return u.includes('@')?u:u+'@spiderstore.app'};
 const rowToVenta=r=>({id:r.id,num:r.num,fecha:r.fecha,hora:r.hora||'',cliente:r.cliente||'',doc:r.doc||'',tel:r.tel||'',metodo:r.metodo||'Efectivo',vendedor:r.vendedor||'',vid:r.vendedor_id,estado:r.estado,cobrado:n0(r.cobrado),obs:r.obs||'',aprob:r.aprobacion,aprobNota:r.nota_admin||'',aprobEn:r.aprobada_en,
@@ -78,7 +79,10 @@ async function loadAll(){
     S.ventas=all.map(rowToVenta);
     const pf=await sb.from('perfiles').select('*').order('creado');
     if(!pf.error)S.perfiles=pf.data||[];
-  }else{S.ventas=[];S.perfiles=[]}
+  }else{
+    S.ventas=[];S.perfiles=[];
+    const mv=await sb.rpc('mis_ventas');if(mv.error)throw mv.error;S.mis=mv.data||[];
+  }
 }
 async function refresh(quiet){try{await loadAll();render()}catch(e){if(!quiet)toast('No se pudo actualizar: '+((e&&e.message)||'sin conexión'))}}
 function scheduleRefresh(){clearTimeout(rTimer);rTimer=setTimeout(()=>refresh(true),700)}
@@ -151,7 +155,7 @@ async function doLogin(u,p){
 }
 async function doLogout(){
   stopLive();try{await sb.auth.signOut()}catch(e){}
-  me=null;isAdmin=false;S.ventas=[];S.proveedores=[];S.perfiles=[];D=null;curNota=null;closeModal();authMsg='';mounted=null;render();
+  me=null;isAdmin=false;S.ventas=[];S.proveedores=[];S.perfiles=[];S.mis=[];D=null;curNota=null;closeModal();authMsg='';mounted=null;render();
 }
 async function boot(){
   renderTop();render();
@@ -221,7 +225,7 @@ const IC={
 };
 const ico=n=>'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+IC[n]+'</svg>';
 const NAV_A=[['vender','Vender','plus'],['ventas','Ventas','receipt'],['costos','Costos','truck'],['resumen','Resumen','chart'],['ajustes','Ajustes','cog']];
-const NAV_V=[['vender','Vender','plus'],['prov','Proveedores','truck']];
+const NAV_V=[['vender','Vender','plus'],['misventas','Mis ventas','receipt'],['prov','Proveedores','truck']];
 const navList=()=>isAdmin?NAV_A:NAV_V;
 const pendAprob=()=>S.ventas.filter(v=>v.aprob==='pendiente').length;
 function renderNav(){
@@ -274,8 +278,53 @@ function render(){
   if(once&&mounted===view)return;
   if(view==='ventas'&&mounted==='ventas'&&document.activeElement&&document.activeElement.id==='q'){const l=$('#vlist');if(l)l.innerHTML=listVentas();return}
   mounted=view;
-  el.innerHTML=view==='vender'?vVender():view==='ventas'?vVentas():view==='costos'?vCostos():view==='resumen'?vResumen():view==='prov'?vProvVend():vAjustes();
+  el.innerHTML=view==='vender'?vVender():view==='ventas'?vVentas():view==='costos'?vCostos():view==='resumen'?vResumen():view==='prov'?vProvVend():view==='misventas'?vMisVentas():vAjustes();
   if(view==='vender')updateTotals();
+}
+
+/* ===== MIS VENTAS (vendedor) ===== */
+const miTotal=v=>(v.items||[]).reduce((a,i)=>a+n0(i.qty)*n0(i.precio),0);
+const miAp=v=>v.aprob==='aprobada'?'<span class="chip good">Aprobada</span>':v.aprob==='observada'?'<span class="chip red">Observada</span>':'<span class="chip warn">Por aprobar</span>';
+const miCostoChip=i=>i.est==='oficial'?'<span class="chip good">Costo aprobado</span>':i.est==='revision'?'<span class="chip warn">Costo en revisión</span>':'<span class="chip">Sin costo</span>';
+function vMisVentas(){
+  const L=S.mis||[],c={pend:0,aprobada:0,observada:0};
+  L.forEach(v=>{if(v.aprob==='aprobada')c.aprobada++;else if(v.aprob==='observada')c.observada++;else c.pend++});
+  const F=[['todas','Todas ('+L.length+')'],['pendiente','Por aprobar ('+c.pend+')'],['aprobada','Aprobadas ('+c.aprobada+')'],['observada','Observadas ('+c.observada+')']];
+  const V=L.filter(v=>mf==='todas'||(mf==='pendiente'?(v.aprob!=='aprobada'&&v.aprob!=='observada'):v.aprob===mf));
+  return '<div class="head"><h1>Mis ventas</h1><p>Aquí ves lo que vendiste y si el administrador ya lo aprobó. También puedes anotar costos que quedan por revisión.</p></div>'+
+  '<div class="seg">'+F.map(f=>'<button data-act="mf" data-p="'+f[0]+'" aria-pressed="'+(mf===f[0])+'">'+f[1]+'</button>').join('')+'</div>'+
+  (V.length?V.map(v=>{
+    const its=v.items||[],res=its.slice(0,2).map(i=>n0(i.qty)+'× '+esc(i.desc)).join(' · ')+(its.length>2?' · +'+(its.length-2)+' más':'');
+    const rev=its.filter(i=>i.est==='revision').length,sin=its.filter(i=>i.est==='sin_costo').length;
+    return '<button class="vc" data-act="open-mia" data-id="'+esc(v.id)+'"><div class="vh"><b>#'+pad4(v.num)+'</b><span class="mut small">'+fmtD(v.fecha)+(v.hora?' · '+esc(v.hora):'')+'</span><span class="num" style="font-weight:500">'+fmt(miTotal(v))+'</span></div>'+
+    '<div>'+esc(v.cliente||'Sin nombre')+'</div><div class="mut small">'+res+'</div><div class="chips">'+miAp(v)+(v.estado==='reservada'?'<span class="chip">Reserva</span>':'')+(rev?'<span class="chip warn">Costo en revisión ('+rev+')</span>':'')+(sin?'<span class="chip">Sin costo ('+sin+')</span>':'')+'</div></button>';
+  }).join(''):'<div class="empty"><b>'+(L.length?'Nada en esta lista':'Aún no registraste ventas')+'</b>'+(L.length?'Prueba con otro filtro.':'Cuando registres una venta aparecerá aquí.')+'</div>');
+}
+function openMia(id){
+  const v=(S.mis||[]).find(x=>x.id===id);if(!v)return;
+  const rows=(v.items||[]).map((i,k)=>{const p=prov(i.prov);return '<div class="pi"><div class="row between"><b>'+esc(i.desc)+'</b><span class="num">'+fmt(n0(i.qty)*n0(i.precio))+'</span></div>'+
+    '<div class="mut small">'+n0(i.qty)+' u. a '+fmt(i.precio)+(i.serie?' · S/N '+esc(i.serie):'')+'</div>'+
+    '<div class="chips" style="margin-top:4px">'+miCostoChip(i)+'</div>'+
+    (i.est==='revision'?'<div class="mut small" style="margin-top:4px">Propuesto: '+(i.pago==='propio'?'Stock propio':esc(p?p.nombre:'Proveedor'))+' · costo '+fmt(i.costo)+' c/u</div>':'')+
+    (i.est!=='oficial'?'<div><button class="lnk" data-act="mi-costo" data-v="'+esc(v.id)+'" data-i="'+k+'">'+(i.est==='revision'?'Cambiar costo':'Agregar costo y proveedor')+'</button></div>':'')+'</div>'}).join('');
+  modal('<div class="row between"><h2>Venta #'+pad4(v.num)+'</h2><button class="btn sm" data-act="close">Cerrar</button></div><p class="mut" style="margin-bottom:6px">'+esc(v.cliente||'Sin nombre')+' · '+fmtLong(v.fecha)+(v.hora?' · '+esc(v.hora):'')+' · '+esc(v.metodo||'')+'</p>'+
+   '<div class="row" style="margin-bottom:10px">'+miAp(v)+(v.estado==='reservada'?'<span class="chip">Reserva</span>':'')+'</div>'+
+   (v.nota?'<div class="hint" style="margin:0 0 10px"><b>Nota del administrador:</b> '+esc(v.nota)+'</div>':'')+
+   rows+'<div class="row between" style="margin-top:10px"><span class="mut">Total</span><b class="num" style="font-size:1.2rem">'+fmt(miTotal(v))+'</b></div>');
+}
+function openMiCosto(vid,k){
+  const v=(S.mis||[]).find(x=>x.id===vid);if(!v)return;const i=v.items[k];if(!i)return;
+  modal('<h2>Costo y proveedor</h2><p class="mut" style="margin-bottom:10px">'+esc(i.desc)+' · venta '+fmt(i.precio)+' c/u</p><form id="mc">'+
+   '<label class="f"><span>Proveedor</span><select name="prov"><option value="">— elegir —</option>'+S.proveedores.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>'<option value="'+esc(p.id)+'"'+(i.prov===p.id?' selected':'')+'>'+esc(p.nombre)+'</option>').join('')+'</select></label>'+
+   '<div class="g2" style="margin-top:10px"><label class="f"><span>Costo c/u (Bs)</span><input name="costo" type="number" step="any" inputmode="decimal" required value="'+esc(i.costo||'')+'"></label>'+
+   '<label class="f"><span>Pago al proveedor</span><select name="pago">'+Object.entries(PAGOS).map(([a,b])=>'<option value="'+a+'"'+((i.pago||'pagado')===a?' selected':'')+'>'+b+'</option>').join('')+'</select></label></div>'+
+   '<div class="hint">Queda <b>en revisión</b> hasta que el administrador lo apruebe. Si el proveedor no está en la lista, regístralo antes en Proveedores.</div>'+
+   '<div class="actions"><button type="button" class="btn" data-act="close">Cancelar</button><button class="btn pri">Enviar a revisión</button></div></form>');
+  $('#mc').addEventListener('submit',e=>{e.preventDefault();const el=e.target.elements;
+    const costo=n0(el.costo.value),pago=el.pago.value,pid=el.prov.value;
+    if(!(costo>0)){toast('Escribe el costo');return}
+    if(pago!=='propio'&&!pid){toast('Elige el proveedor');return}
+    guard(async()=>{const r=await sb.rpc('proponer_costo',{p_item:i.id,p_costo:costo,p_prov:pago==='propio'?null:pid,p_pago:pago});if(r.error)throw r.error;await refresh(true);closeModal();toast('Costo enviado a revisión')})});
 }
 function vProvVend(){
   const L=S.proveedores.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
@@ -353,7 +402,7 @@ async function saveSale(){
       if(r.error)throw r.error;
       saved={...v,id:r.data.id,num:r.data.num,fecha:r.data.fecha,hora:r.data.hora,aprob:r.data.aprobacion,vendedor:isAdmin?v.vendedor:me.nombre};
       toast('Venta #'+pad4(saved.num)+' guardada'+(isAdmin?'':' · queda por aprobar'));
-      if(isAdmin)await refresh(true);
+      await refresh(true);
     }
     newDraftNow();mounted=null;render();
     openNota(saved);
@@ -936,6 +985,9 @@ document.addEventListener('click',e=>{
   if(a==='cuenta')return openCuenta();
   if(a==='logout')return doLogout();
   if(a==='af'){af=d.p;mounted=null;render();return}
+  if(a==='mf'){mf=d.p;mounted=null;render();return}
+  if(a==='open-mia')return openMia(d.id);
+  if(a==='mi-costo'){closeModal();return openMiCosto(d.v,d.i)}
   if(a==='aprobar-costos')return guard(async()=>{const r=await sb.from('venta_items').update({costo_estado:'oficial'}).eq('venta_id',d.id).eq('costo_estado','revision');if(r.error)throw r.error;await refresh(true);closeModal();toast('Costos aprobados')});
   if(a==='ok-prov')return guard(async()=>{const r=await sb.from('proveedores').update({revisado:true}).eq('id',d.id);if(r.error)throw r.error;await refresh(true);closeModal();toast('Proveedor aprobado')});
   if(a==='aprobar')return guard(async()=>{await setAprob(d.id,'aprobada','');closeModal();toast('Venta aprobada')});
