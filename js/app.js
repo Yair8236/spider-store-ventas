@@ -425,7 +425,7 @@ function itemHtml(i,k){
 }
 function vVender(){
   const d=D;
-  return (isAdmin?'':miniMeta())+'<div class="head"><h1>'+(d.id?'Editar venta <span class="num mut" style="font-size:1.1rem">#'+pad4(d.num)+'</span>':'Nueva venta')+'</h1><p>'+(isAdmin?'Producto, serie y precio. El proveedor y el costo son opcionales: puedes completarlos después en Costos.':'Registra producto, serie y precio. Si conseguiste el producto en otro lado, anota su costo y proveedor: el administrador los revisa y aprueba la venta.')+'</p></div>'+
+  return '<div class="head"><h1>'+(d.id?'Editar venta <span class="num mut" style="font-size:1.1rem">#'+pad4(d.num)+'</span>':'Nueva venta')+'</h1><p>'+(isAdmin?'Producto, serie y precio. El proveedor y el costo son opcionales: puedes completarlos después en Costos.':'Registra producto, serie y precio. Si conseguiste el producto en otro lado, anota su costo y proveedor: el administrador los revisa y aprueba la venta.')+'</p></div>'+
   '<div class="card"><div class="g2"><label class="f"><span>Cliente</span><input data-k="cliente" value="'+esc(d.cliente)+'" placeholder="Nombre del cliente"></label>'+
   '<label class="f"><span>CI / NIT (opcional)</span><input data-k="doc" value="'+esc(d.doc)+'" inputmode="numeric"></label>'+
   '<label class="f"><span>Celular (WhatsApp)</span><input data-k="tel" value="'+esc(d.tel)+'" inputmode="tel" placeholder="Ej. 730-94025"></label>'+
