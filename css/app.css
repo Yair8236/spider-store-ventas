@@ -104,3 +104,5 @@ table.t{width:100%;border-collapse:collapse;min-width:420px}
 #who{max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .top .row{flex-wrap:nowrap}
 @media (min-width:900px){body{font-size:16px}.wrap{max-width:1040px}}
+
+.cst{margin-top:10px}.cst summary{cursor:pointer;color:var(--mut);font-size:.9rem;padding:4px 0}

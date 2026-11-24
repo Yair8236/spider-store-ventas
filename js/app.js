@@ -61,13 +61,13 @@ const S={cfg:{...DEF},ventas:[],proveedores:[],perfiles:[]};
 let sb=null,me=null,isAdmin=false,ready=false,view='vender',cTab='pend',vf='mes',af='todas',rp='mes',q='',D=null,mounted=null,curNota=null,curPdf=null,saving=false,authMsg='',liveTimer=null,rTimer=null,chan=null;
 const emailOf=u=>{u=String(u||'').trim().toLowerCase();return u.includes('@')?u:u+'@spiderstore.app'};
 const rowToVenta=r=>({id:r.id,num:r.num,fecha:r.fecha,hora:r.hora||'',cliente:r.cliente||'',doc:r.doc||'',tel:r.tel||'',metodo:r.metodo||'Efectivo',vendedor:r.vendedor||'',vid:r.vendedor_id,estado:r.estado,cobrado:n0(r.cobrado),obs:r.obs||'',aprob:r.aprobacion,aprobNota:r.nota_admin||'',aprobEn:r.aprobada_en,
-  items:(r.venta_items||[]).slice().sort((a,b)=>a.orden-b.orden).map(i=>({id:i.id,cat:i.cat,desc:i.descr,serie:i.serie||'',qty:i.qty,precio:n0(i.precio),garantia:i.garantia,costo:n0(i.costo),prov:i.prov_id||'',pago:i.pago,liquidado:!!i.liquidado}))});
-const itemRow=(i,vid,k)=>({venta_id:vid,orden:k,cat:i.cat||'Otro',descr:i.desc,serie:i.serie||'',qty:Math.max(1,Math.round(n0(i.qty))||1),precio:n0(i.precio),garantia:Math.max(0,Math.round(n0(i.garantia))),costo:n0(i.costo),prov_id:i.prov||null,pago:i.pago||'pagado',liquidado:!!i.liquidado});
+  items:(r.venta_items||[]).slice().sort((a,b)=>a.orden-b.orden).map(i=>({id:i.id,cat:i.cat,desc:i.descr,serie:i.serie||'',qty:i.qty,precio:n0(i.precio),garantia:i.garantia,costo:n0(i.costo),prov:i.prov_id||'',pago:i.pago,liquidado:!!i.liquidado,est:i.costo_estado||'sin_costo'}))});
+const itemRow=(i,vid,k)=>({venta_id:vid,orden:k,cat:i.cat||'Otro',descr:i.desc,serie:i.serie||'',qty:Math.max(1,Math.round(n0(i.qty))||1),precio:n0(i.precio),garantia:Math.max(0,Math.round(n0(i.garantia))),costo:n0(i.costo),prov_id:i.prov||null,pago:i.pago||'pagado',liquidado:!!i.liquidado,costo_estado:i.est||(n0(i.costo)>0&&(i.pago==='propio'||i.prov)?'oficial':'sin_costo')});
 async function loadAll(){
   if(!sb||!me)return;
   const [pr,cf]=await Promise.all([sb.from('proveedores').select('*').order('nombre'),sb.from('config').select('datos').eq('id',1).maybeSingle()]);
   if(pr.error)throw pr.error;
-  S.proveedores=(pr.data||[]).map(p=>({id:p.id,nombre:p.nombre,telefono:p.telefono||'',ciudad:p.ciudad||'',nota:p.nota||''}));
+  S.proveedores=(pr.data||[]).map(p=>({id:p.id,nombre:p.nombre,telefono:p.telefono||'',ciudad:p.ciudad||'',nota:p.nota||'',revisado:p.revisado!==false}));
   S.cfg={...DEF,...((cf.data&&cf.data.datos)||{})};
   if(isAdmin){
     const all=[];
@@ -98,7 +98,7 @@ async function put(col,obj){
   if(col==='proveedores'){
     const row={nombre:obj.nombre,telefono:obj.telefono||'',ciudad:obj.ciudad||'',nota:obj.nota||''};
     let id=obj.id;
-    if(id){const r=await sb.from('proveedores').update(row).eq('id',id);if(r.error)throw r.error}
+    if(id){if(isAdmin)row.revisado=true;const r=await sb.from('proveedores').update(row).eq('id',id);if(r.error)throw r.error}
     else{const r=await sb.from('proveedores').insert(row).select('id').single();if(r.error)throw r.error;id=r.data.id}
     await refresh(true);return id;
   }
@@ -169,12 +169,14 @@ async function guard(fn){try{await fn()}catch(e){toast('No se pudo guardar: '+((
 const prov=id=>S.proveedores.find(p=>p.id===id);
 const provName=id=>(prov(id)||{}).nombre||'';
 const itemSub=i=>n0(i.qty)*n0(i.precio);
-const itemDone=i=>n0(i.costo)>0&&(i.pago==='propio'||!!i.prov);
+const itemFull=i=>n0(i.costo)>0&&(i.pago==='propio'||!!i.prov);
+const itemRev=i=>itemFull(i)&&i.est==='revision';
+const itemDone=i=>itemFull(i)&&i.est==='oficial';
 function calc(v){
-  let total=0,costo=0,gan=0,sinCosto=0,deuda=0;
-  (v.items||[]).forEach(i=>{const s=itemSub(i);total+=s;if(itemDone(i)){const c=n0(i.qty)*n0(i.costo);costo+=c;gan+=s-c;if(i.pago==='debo'&&!i.liquidado)deuda+=c}else sinCosto++});
+  let total=0,costo=0,gan=0,sinCosto=0,deuda=0,rev=0;
+  (v.items||[]).forEach(i=>{const s=itemSub(i);total+=s;if(itemDone(i)){const c=n0(i.qty)*n0(i.costo);costo+=c;gan+=s-c;if(i.pago==='debo'&&!i.liquidado)deuda+=c}else{sinCosto++;if(itemRev(i))rev++}});
   const cobrado=v.estado==='reservada'?n0(v.cobrado):total;
-  return {total,costo,gan,sinCosto,deuda,cobrado,saldo:Math.max(0,total-cobrado)};
+  return {total,costo,gan,sinCosto,rev,deuda,cobrado,saldo:Math.max(0,total-cobrado)};
 }
 function pendingItems(){
   const out=[];
@@ -277,13 +279,13 @@ function render(){
 }
 function vProvVend(){
   const L=S.proveedores.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
-  return '<div class="head"><h1>Proveedores</h1><p>Aquí puedes registrar un proveedor nuevo. Solo el administrador puede modificarlos o borrarlos.</p></div>'+
+  return '<div class="head"><h1>Proveedores</h1><p>Registra aquí los proveedores nuevos que consigas. Quedan por revisión hasta que el administrador los apruebe; solo él puede modificarlos o borrarlos.</p></div>'+
   '<div class="row between" style="margin-bottom:10px"><span class="mut">'+L.length+' proveedor(es)</span><button class="btn pri sm" data-act="new-prov">+ Nuevo proveedor</button></div>'+
-  (L.length?L.map(p=>'<div class="vc" style="cursor:default"><div class="vh"><b>'+esc(p.nombre)+'</b><span class="num mut small">'+esc(p.telefono||'')+'</span></div><div class="mut small">'+esc([p.ciudad,p.nota].filter(Boolean).join(' · '))+'</div></div>').join(''):'<div class="empty"><b>Aún no hay proveedores</b>Registra el primero con el botón de arriba.</div>');
+  (L.length?L.map(p=>'<div class="vc" style="cursor:default"><div class="vh"><b>'+esc(p.nombre)+'</b><span class="num mut small">'+esc(p.telefono||'')+'</span></div><div class="mut small">'+esc([p.ciudad,p.nota].filter(Boolean).join(' · '))+'</div>'+(p.revisado===false?'<div class="chips"><span class="chip warn">Por revisar</span></div>':'')+'</div>').join(''):'<div class="empty"><b>Aún no hay proveedores</b>Registra el primero con el botón de arriba.</div>');
 }
 
 /* ===== VENDER ===== */
-function blankItem(){return {cat:'Tarjeta de video',desc:'',serie:'',qty:1,precio:'',garantia:S.cfg.garantia}}
+function blankItem(){return {cat:'Tarjeta de video',desc:'',serie:'',qty:1,precio:'',garantia:S.cfg.garantia,prov:'',costo:'',pago:'pagado'}}
 function newDraft(){const n=new Date();return {id:null,num:null,fecha:today(),hora:pad2(n.getHours())+':'+pad2(n.getMinutes()),cliente:'',doc:'',tel:'',metodo:'Efectivo',vendedor:isAdmin?(S.cfg.vendedor||(me&&me.nombre)||''):((me&&me.nombre)||''),estado:'entregada',cobrado:'',obs:'',items:[blankItem()]}}
 function newDraftNow(){D=newDraft()}
 function itemHtml(i,k){
@@ -294,6 +296,9 @@ function itemHtml(i,k){
   '<div class="g3"><label class="f"><span>Cantidad</span><input data-f="qty" type="number" min="1" step="1" inputmode="numeric" value="'+esc(i.qty)+'"></label>'+
   '<label class="f"><span>Precio c/u (Bs)</span><input data-f="precio" type="number" step="any" inputmode="decimal" value="'+esc(i.precio)+'"></label>'+
   '<label class="f"><span>Garantía (meses)</span><input data-f="garantia" type="number" min="0" step="1" inputmode="numeric" value="'+esc(i.garantia)+'"></label></div>'+
+  (D.id?'':'<details class="cst"'+(n0(i.costo)>0||i.prov?' open':'')+'><summary>Costo y proveedor (opcional)</summary><div class="hint">'+(isAdmin?'Si ya lo sabes, anótalo aquí; si no, complétalo después en Costos.':'¿Lo conseguiste en otro lado? Anota dónde y a cuánto. Queda <b>por revisión</b> hasta que el administrador lo apruebe.')+'</div>'+
+  '<label class="f"><span>Proveedor</span><select data-f="prov"><option value="">— elegir —</option>'+S.proveedores.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>'<option value="'+esc(p.id)+'"'+(i.prov===p.id?' selected':'')+'>'+esc(p.nombre)+'</option>').join('')+'</select></label>'+
+  '<div class="g2"><label class="f"><span>Costo c/u (Bs)</span><input data-f="costo" type="number" step="any" inputmode="decimal" value="'+esc(i.costo)+'"></label><label class="f"><span>Pago al proveedor</span><select data-f="pago">'+Object.entries(PAGOS).map(([a,b])=>'<option value="'+a+'"'+(i.pago===a?' selected':'')+'>'+b+'</option>').join('')+'</select></label></div></details>')+
   '<div class="itot"><span class="mut">Subtotal <b class="num" data-sub style="color:var(--ink)"></b></span>'+(D.items.length>1?'<button type="button" class="lnk bad" data-act="rm-item">Quitar</button>':'')+'</div></div>';
 }
 function vVender(){
@@ -330,6 +335,7 @@ async function saveSale(){
   const items=D.items.map(i=>({...i,desc:String(i.desc||'').trim(),serie:String(i.serie||'').trim().replace(/[,;\s]+$/,''),qty:Math.max(1,Math.round(n0(i.qty))||1),precio:n0(i.precio),garantia:Math.max(0,Math.round(n0(i.garantia)))})).filter(i=>i.desc);
   if(!items.length){toast('Escribe qué producto vendes');return}
   if(items.some(i=>!(i.precio>0))){toast('Falta el precio de algún producto');return}
+  if(!D.id&&items.some(i=>n0(i.costo)>0&&i.pago!=='propio'&&!i.prov)){toast('Elige el proveedor del producto que tiene costo, o borra el costo');return}
   const c=calc({items,estado:D.estado,cobrado:D.cobrado});
   const v={...D,items};
   v.cliente=String(D.cliente||'').trim();v.cobrado=D.estado==='reservada'?Math.min(n0(D.cobrado),c.total):c.total;
@@ -342,7 +348,7 @@ async function saveSale(){
       toast('Venta #'+pad4(v.num)+' actualizada');
     }else{
       const payload={fecha:v.fecha,cliente:v.cliente,doc:v.doc,tel:v.tel,metodo:v.metodo,vendedor:v.vendedor,estado:v.estado,cobrado:v.cobrado,obs:v.obs,
-        items:items.map(i=>({cat:i.cat,desc:i.desc,serie:i.serie,qty:i.qty,precio:i.precio,garantia:i.garantia}))};
+        items:items.map(i=>({cat:i.cat,desc:i.desc,serie:i.serie,qty:i.qty,precio:i.precio,garantia:i.garantia,costo:n0(i.costo),prov:i.prov||'',pago:i.pago||'pagado'}))};
       const r=await sb.rpc('registrar_venta',{p:payload});
       if(r.error)throw r.error;
       saved={...v,id:r.data.id,num:r.data.num,fecha:r.data.fecha,hora:r.data.hora,aprob:r.data.aprobacion,vendedor:isAdmin?v.vendedor:me.nombre};
@@ -374,7 +380,7 @@ function listVentas(){
     return '<button class="vc" data-act="open-venta" data-id="'+esc(v.id)+'"><div class="vh"><b>#'+pad4(v.num)+'</b><span class="mut small">'+fmtD(v.fecha)+(v.hora?' · '+esc(v.hora):'')+'</span><span class="num" style="font-weight:500">'+fmt(c.total)+'</span></div>'+
       '<div>'+esc(v.cliente||'Sin nombre')+' <span class="mut">· '+esc(v.metodo||'')+(v.vendedor?' · vendió '+esc(v.vendedor):'')+'</span></div><div class="mut small">'+resumen+'</div>'+gline+
       '<div class="chips">'+apChip(v)+(v.estado==='reservada'?'<span class="chip">Reserva · saldo '+fmt(c.saldo)+'</span>':'')+
-      (c.sinCosto?'<span class="chip warn">Falta costo ('+c.sinCosto+')</span>':'<span class="chip good">Ganancia '+fmt(c.gan)+'</span>')+'</div></button>';
+      (c.rev?'<span class="chip warn">Costo por revisar ('+c.rev+')</span>':'')+(c.sinCosto-c.rev>0?'<span class="chip warn">Falta costo ('+(c.sinCosto-c.rev)+')</span>':(c.rev?'':'<span class="chip good">Ganancia '+fmt(c.gan)+'</span>'))+'</div></button>';
   }).join('');
 }
 function vVentas(){
@@ -396,12 +402,12 @@ function openVenta(id){
    (v.estado==='reservada'?'<div class="row between"><span class="mut">Cobrado</span><span class="num">'+fmt(c.cobrado)+'</span></div><div class="row between"><span class="mut">Saldo por cobrar</span><b class="num warnc">'+fmt(c.saldo)+'</b></div>':'')+
    '<div class="row between" style="margin-top:6px"><span class="mut">Ganancia (con costo cargado)</span><b class="num good">'+fmt(c.gan)+'</b></div>';
   const side='<aside class="side"><h3 style="margin-bottom:6px">Proveedor y costos</h3>'+(v.items||[]).map((i,k)=>{
-    const p=prov(i.prov),done=itemDone(i);
-    return '<div class="pi"><b>'+esc(i.desc)+'</b>'+(done?'<div>'+(i.pago==='propio'?'Stock propio':esc(p?p.nombre:'Proveedor'))+(p&&p.telefono?' <span class="mut num small">'+esc(p.telefono)+'</span>':'')+'</div><div class="mut small">Costo '+fmt(n0(i.qty)*n0(i.costo))+' · ganancia '+fmt(itemSub(i)-n0(i.qty)*n0(i.costo))+'</div><div style="margin-top:4px"><span class="chip '+(i.pago==='debo'&&!i.liquidado?'red':'good')+'">'+(i.pago==='debo'?(i.liquidado?'Pagado':'Debo'):PAGOS[i.pago])+'</span></div>':'<span class="chip warn">Falta proveedor y costo</span>')+
-      '<div><button class="lnk" data-act="assign" data-v="'+esc(v.id)+'" data-i="'+k+'">'+(done?'Editar':'Completar ahora')+'</button></div></div>';
+    const p=prov(i.prov),done=itemDone(i),rv=itemRev(i);
+    return '<div class="pi"><b>'+esc(i.desc)+'</b>'+(done?'<div>'+(i.pago==='propio'?'Stock propio':esc(p?p.nombre:'Proveedor'))+(p&&p.telefono?' <span class="mut num small">'+esc(p.telefono)+'</span>':'')+'</div><div class="mut small">Costo '+fmt(n0(i.qty)*n0(i.costo))+' · ganancia '+fmt(itemSub(i)-n0(i.qty)*n0(i.costo))+'</div><div style="margin-top:4px"><span class="chip '+(i.pago==='debo'&&!i.liquidado?'red':'good')+'">'+(i.pago==='debo'?(i.liquidado?'Pagado':'Debo'):PAGOS[i.pago])+'</span></div>':(rv?'<div>'+(i.pago==='propio'?'Stock propio':esc(p?p.nombre:'Proveedor'))+'</div><div class="mut small">Costo propuesto '+fmt(n0(i.qty)*n0(i.costo))+' · ganancia '+fmt(itemSub(i)-n0(i.qty)*n0(i.costo))+'</div><div style="margin-top:4px"><span class="chip warn">Por revisión</span></div>':'<span class="chip warn">Falta proveedor y costo</span>'))+
+      '<div><button class="lnk" data-act="assign" data-v="'+esc(v.id)+'" data-i="'+k+'">'+(done?'Editar':rv?'Revisar y aprobar':'Completar ahora')+'</button></div></div>';
   }).join('')+'</aside>';
   modal('<div class="row between"><h2>Venta #'+pad4(v.num)+'</h2><button class="btn sm" data-act="close">Cerrar</button></div><p class="mut" style="margin-bottom:6px">'+esc(v.cliente||'Sin nombre')+' · '+fmtLong(v.fecha)+(v.hora?' · '+esc(v.hora):'')+' · '+esc(v.metodo||'')+'</p><div class="row" style="margin-bottom:12px">'+apChip(v)+'<span class="mut small">Vendió: '+esc(v.vendedor||'—')+'</span>'+(v.aprobNota?'<span class="small warnc">Nota: '+esc(v.aprobNota)+'</span>':'')+'</div><div class="split"><div>'+left+'</div>'+side+'</div>'+
-   '<div class="actions" style="justify-content:flex-start">'+(v.aprob!=='aprobada'?'<button class="btn ok" data-act="aprobar" data-id="'+esc(v.id)+'">Aprobar venta</button>':'')+(v.aprob!=='observada'?'<button class="btn" data-act="observar" data-id="'+esc(v.id)+'">Observar…</button>':'')+'<button class="btn blue" data-act="show-nota" data-id="'+esc(v.id)+'">Ver nota</button>'+(v.estado==='reservada'&&c.saldo>0?'<button class="btn" data-act="cobro" data-id="'+esc(v.id)+'">Registrar cobro</button>':'')+'<button class="btn" data-act="edit-venta" data-id="'+esc(v.id)+'">Editar</button><button class="btn danger" data-act="del-venta" data-id="'+esc(v.id)+'">Eliminar</button></div>',true);
+   '<div class="actions" style="justify-content:flex-start">'+(v.aprob!=='aprobada'?'<button class="btn ok" data-act="aprobar" data-id="'+esc(v.id)+'">Aprobar venta</button>':'')+(c.rev?'<button class="btn ok" data-act="aprobar-costos" data-id="'+esc(v.id)+'">Aprobar costos ('+c.rev+')</button>':'')+(v.aprob!=='observada'?'<button class="btn" data-act="observar" data-id="'+esc(v.id)+'">Observar…</button>':'')+'<button class="btn blue" data-act="show-nota" data-id="'+esc(v.id)+'">Ver nota</button>'+(v.estado==='reservada'&&c.saldo>0?'<button class="btn" data-act="cobro" data-id="'+esc(v.id)+'">Registrar cobro</button>':'')+'<button class="btn" data-act="edit-venta" data-id="'+esc(v.id)+'">Editar</button><button class="btn danger" data-act="del-venta" data-id="'+esc(v.id)+'">Eliminar</button></div>',true);
 }
 function openCobro(id){
   const v=S.ventas.find(x=>x.id===id);if(!v)return;const c=calc(v);
@@ -421,10 +427,10 @@ function vCostos(){
   const seg='<div class="seg"><button data-act="ctab" data-t="pend" aria-pressed="'+(cTab==='pend')+'">Por completar ('+pend.length+')</button><button data-act="ctab" data-t="prov" aria-pressed="'+(cTab==='prov')+'">Proveedores</button></div>';
   let body='';
   if(cTab==='pend'){
-    body=pend.length?pend.map(x=>'<button class="vc" data-act="assign" data-v="'+esc(x.v.id)+'" data-i="'+x.k+'"><div class="vh"><b>'+esc(x.i.desc)+'</b><span class="num">'+fmt(itemSub(x.i))+'</span></div><div class="mut small">'+n0(x.i.qty)+' u. · venta #'+pad4(x.v.num)+' · '+fmtD(x.v.fecha)+' · '+esc(x.v.cliente||'Sin nombre')+(x.i.serie?' · S/N '+esc(x.i.serie):'')+'</div><div class="chips"><span class="chip warn">Asignar proveedor y costo</span></div></button>').join(''):'<div class="empty"><b>Todo al día</b>Cada producto vendido ya tiene su proveedor y su costo.</div>';
+    body=pend.length?pend.map(x=>'<button class="vc" data-act="assign" data-v="'+esc(x.v.id)+'" data-i="'+x.k+'"><div class="vh"><b>'+esc(x.i.desc)+'</b><span class="num">'+fmt(itemSub(x.i))+'</span></div><div class="mut small">'+n0(x.i.qty)+' u. · venta #'+pad4(x.v.num)+' · '+fmtD(x.v.fecha)+' · '+esc(x.v.cliente||'Sin nombre')+(x.i.serie?' · S/N '+esc(x.i.serie):'')+'</div><div class="chips">'+(itemRev(x.i)?'<span class="chip warn">Por revisión · '+fmt(n0(x.i.qty)*n0(x.i.costo))+(x.v.vendedor?' · '+esc(x.v.vendedor):'')+'</span>':'<span class="chip warn">Asignar proveedor y costo</span>')+'</div></button>').join(''):'<div class="empty"><b>Todo al día</b>Cada producto vendido ya tiene su proveedor y su costo.</div>';
   }else{
     body='<div class="row between" style="margin-bottom:10px"><span class="mut">'+S.proveedores.length+' proveedor(es)</span><button class="btn pri sm" data-act="new-prov">+ Nuevo proveedor</button></div>'+
-    (S.proveedores.length?S.proveedores.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>{const st=provStats(p.id);return '<button class="vc" data-act="open-prov" data-id="'+esc(p.id)+'"><div class="vh"><b>'+esc(p.nombre)+'</b><span class="num mut small">'+esc(p.telefono||'')+'</span></div><div class="mut small">'+st.n+' pieza(s) vendidas · compras '+fmt(st.compras)+'</div><div class="chips">'+(st.deuda>0?'<span class="chip red">Debo '+fmt(st.deuda)+'</span>':'<span class="chip good">Sin deuda</span>')+'<span class="chip">Ganancia '+fmt(st.gan)+'</span></div></button>'}).join(''):'<div class="empty"><b>Aún no hay proveedores</b>Se crean aquí o al completar el costo de un producto vendido.</div>');
+    (S.proveedores.length?S.proveedores.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>{const st=provStats(p.id);return '<button class="vc" data-act="open-prov" data-id="'+esc(p.id)+'"><div class="vh"><b>'+esc(p.nombre)+'</b><span class="num mut small">'+esc(p.telefono||'')+'</span></div><div class="mut small">'+st.n+' pieza(s) vendidas · compras '+fmt(st.compras)+'</div><div class="chips">'+(p.revisado===false?'<span class="chip warn">Por revisar</span>':'')+(st.deuda>0?'<span class="chip red">Debo '+fmt(st.deuda)+'</span>':'<span class="chip good">Sin deuda</span>')+'<span class="chip">Ganancia '+fmt(st.gan)+'</span></div></button>'}).join(''):'<div class="empty"><b>Aún no hay proveedores</b>Se crean aquí o al completar el costo de un producto vendido.</div>');
   }
   return '<div class="head"><h1>Costos y proveedores</h1><p>Aquí se asigna de qué proveedor salió cada producto y cuánto costó.</p></div>'+seg+body;
 }
@@ -432,8 +438,8 @@ function openAssign(vid,k){
   const v=S.ventas.find(x=>x.id===vid);if(!v)return;const i=v.items[k];if(!i)return;
   const last=lastInfo().cost[norm(i.desc)]||{};
   const cur={prov:i.prov||last.prov||'',costo:i.costo||last.costo||'',pago:i.pago||last.pago||'pagado'};
-  const same=pendingItems().filter(x=>!(x.v.id===vid&&x.k===k)&&norm(x.i.desc)===norm(i.desc));
-  modal('<h2>Proveedor y costo</h2><p class="mut" style="margin-bottom:10px">'+esc(i.desc)+' · '+n0(i.qty)+' u. · venta '+fmt(i.precio)+' c/u'+(i.serie?' · S/N '+esc(i.serie):'')+'</p><form id="af">'+
+  const same=pendingItems().filter(x=>!(x.v.id===vid&&x.k===k)&&norm(x.i.desc)===norm(i.desc)&&!itemRev(x.i));
+  modal('<h2>Proveedor y costo</h2><p class="mut" style="margin-bottom:10px">'+esc(i.desc)+' · '+n0(i.qty)+' u. · venta '+fmt(i.precio)+' c/u'+(i.serie?' · S/N '+esc(i.serie):'')+'</p>'+(itemRev(i)?'<div class="hint" style="margin-bottom:10px">Costo propuesto por <b>'+esc(v.vendedor||'el vendedor')+'</b>. Revísalo y pulsa Guardar para aprobarlo.</div>':'')+'<form id="af">'+
    '<label class="f"><span>Proveedor</span><select name="prov"><option value="">— elegir —</option>'+S.proveedores.map(p=>'<option value="'+esc(p.id)+'"'+(cur.prov===p.id?' selected':'')+'>'+esc(p.nombre)+'</option>').join('')+'<option value="__new">+ Nuevo proveedor…</option></select></label>'+
    '<div id="newp" class="g2" style="margin-top:10px" hidden><label class="f"><span>Nombre</span><input name="pnom"></label><label class="f"><span>Teléfono</span><input name="ptel" inputmode="tel"></label></div>'+
    '<div class="g2" style="margin-top:10px"><label class="f"><span>Costo por unidad (Bs)</span><input name="costo" type="number" step="any" inputmode="decimal" required value="'+esc(cur.costo)+'"></label>'+
@@ -450,7 +456,7 @@ function openAssign(vid,k){
     const costo=n0(el.costo.value);if(!(costo>0)){toast('Escribe el costo');return}
     const targets=[{vid,k}].concat(el.all&&el.all.checked?same.map(x=>({vid:x.v.id,k:x.k})):[]);
     const work={};
-    targets.forEach(t=>{const vv=work[t.vid]||(work[t.vid]=JSON.parse(JSON.stringify(S.ventas.find(x=>x.id===t.vid))));const it=vv.items[t.k];vv.items[t.k]={...it,prov:pago==='propio'?'':pid,costo,pago,liquidado:pago==='debo'?!!(it.liquidado&&it.pago==='debo'):false}});
+    targets.forEach(t=>{const vv=work[t.vid]||(work[t.vid]=JSON.parse(JSON.stringify(S.ventas.find(x=>x.id===t.vid))));const it=vv.items[t.k];vv.items[t.k]={...it,est:'oficial',prov:pago==='propio'?'':pid,costo,pago,liquidado:pago==='debo'?!!(it.liquidado&&it.pago==='debo'):false}});
     for(const id in work)await put('ventas',work[id]);
     closeModal();toast('Costo guardado');
   })});
@@ -467,7 +473,7 @@ function openProv(id){
   modal('<div class="row between"><h2>'+esc(p.nombre)+'</h2><button class="btn sm" data-act="close">Cerrar</button></div><p class="mut">'+esc([p.telefono,p.ciudad,p.nota].filter(Boolean).join(' · '))+'</p>'+
    '<div class="stats" style="margin-top:12px"><div class="stat"><small>Piezas vendidas</small><span class="num">'+st.n+'</span></div><div class="stat"><small>Compras</small><span class="num">'+fmt(st.compras)+'</span></div><div class="stat"><small>Debo</small><span class="num '+(st.deuda>0?'bad':'good')+'">'+fmt(st.deuda)+'</span></div></div>'+
    (rows.length?'<div class="scroll"><table class="t"><thead><tr><th>Producto</th><th class="r">Costo</th><th>Estado</th><th></th></tr></thead><tbody>'+rows.map(r=>{const d=r.i.pago==='debo'&&!r.i.liquidado;return '<tr><td><b>'+esc(r.i.desc)+'</b><div class="mut small">#'+pad4(r.v.num)+' · '+fmtD(r.v.fecha)+(r.i.serie?' · S/N '+esc(r.i.serie):'')+'</div></td><td class="r num">'+fmt(n0(r.i.qty)*n0(r.i.costo))+'</td><td><span class="chip '+(d?'red':'good')+'">'+(d?'Debo':'Pagado')+'</span></td><td>'+(d?'<button class="lnk" data-act="pay-item" data-v="'+esc(r.v.id)+'" data-i="'+r.k+'" data-p="'+esc(id)+'">Marcar pagado</button>':'')+'</td></tr>'}).join('')+'</tbody></table></div>':'<div class="empty">Aún no hay productos vendidos de este proveedor.</div>')+
-   '<div class="actions" style="justify-content:flex-start">'+(debts.length?'<button class="btn pri" data-act="pay-all" data-p="'+esc(id)+'">Pagar toda la deuda ('+fmt(st.deuda)+')</button>':'')+'<button class="btn" data-act="edit-prov" data-id="'+esc(id)+'">Editar datos</button><button class="btn danger" data-act="del-prov" data-id="'+esc(id)+'">Eliminar</button></div>',true);
+   '<div class="actions" style="justify-content:flex-start">'+(debts.length?'<button class="btn pri" data-act="pay-all" data-p="'+esc(id)+'">Pagar toda la deuda ('+fmt(st.deuda)+')</button>':'')+(p.revisado===false?'<button class="btn ok" data-act="ok-prov" data-id="'+esc(id)+'">Aprobar proveedor</button>':'')+'<button class="btn" data-act="edit-prov" data-id="'+esc(id)+'">Editar datos</button><button class="btn danger" data-act="del-prov" data-id="'+esc(id)+'">Eliminar</button></div>',true);
 }
 async function payItems(pid,only){
   const work={};
@@ -930,6 +936,8 @@ document.addEventListener('click',e=>{
   if(a==='cuenta')return openCuenta();
   if(a==='logout')return doLogout();
   if(a==='af'){af=d.p;mounted=null;render();return}
+  if(a==='aprobar-costos')return guard(async()=>{const r=await sb.from('venta_items').update({costo_estado:'oficial'}).eq('venta_id',d.id).eq('costo_estado','revision');if(r.error)throw r.error;await refresh(true);closeModal();toast('Costos aprobados')});
+  if(a==='ok-prov')return guard(async()=>{const r=await sb.from('proveedores').update({revisado:true}).eq('id',d.id);if(r.error)throw r.error;await refresh(true);closeModal();toast('Proveedor aprobado')});
   if(a==='aprobar')return guard(async()=>{await setAprob(d.id,'aprobada','');closeModal();toast('Venta aprobada')});
   if(a==='observar'){modal('<h2>Observar venta</h2><p class="mut" style="margin-bottom:10px">Deja una nota para recordar qué falta revisar.</p><form id="of"><label class="f"><span>Nota</span><input name="n" required placeholder="Ej. Falta confirmar el precio"></label><div class="actions"><button type="button" class="btn" data-act="close">Cancelar</button><button class="btn pri">Guardar</button></div></form>');$('#of').addEventListener('submit',ev=>{ev.preventDefault();guard(async()=>{await setAprob(d.id,'observada',ev.target.elements.n.value.trim());closeModal();toast('Venta observada')})});return}
   if(a==='approve-all'){modal('<h2>¿Aprobar todas las pendientes?</h2><p class="mut">Se marcarán como aprobadas las '+pendAprob()+' venta(s) por aprobar. Asegúrate de haberlas revisado.</p><div class="actions"><button class="btn" data-act="close">Cancelar</button><button class="btn ok" id="yes">Sí, aprobar</button></div>');$('#yes').addEventListener('click',()=>guard(async()=>{await aprobarTodas();closeModal();toast('Ventas aprobadas')}));return}
