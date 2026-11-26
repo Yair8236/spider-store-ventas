@@ -125,3 +125,6 @@ table.t{width:100%;border-collapse:collapse;min-width:420px}
 .chatf{display:flex;gap:6px;padding:10px;border-top:1px solid var(--line)}
 .chatf input{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:10px;font:inherit}
 .chatn{padding:0 12px calc(8px + env(safe-area-inset-bottom));text-align:center}
+
+.chatperm{margin:8px 10px 0;padding:8px 10px;border:1px dashed var(--line);border-radius:10px;background:var(--s2);color:var(--ink);font:inherit;font-size:.82rem;text-align:left;cursor:pointer}
+.chatperm[hidden]{display:none}

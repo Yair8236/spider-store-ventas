@@ -155,7 +155,7 @@ async function doLogin(u,p){
   await startSession(r.data.user);render();
 }
 async function doLogout(){
-  stopLive();stopChat();try{await sb.auth.signOut()}catch(e){}
+  stopLive();await chatPushOff();stopChat();try{await sb.auth.signOut()}catch(e){}
   me=null;isAdmin=false;S.ventas=[];S.proveedores=[];S.perfiles=[];S.mis=[];S.res={meta:0,pct:0,dias:[]};D=null;curNota=null;closeModal();authMsg='';mounted=null;render();
 }
 async function boot(){
@@ -441,11 +441,11 @@ function chatUi(){
     b.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/></svg><span class="bd" id="chatBd" hidden></span>';
     b.addEventListener('click',()=>chatToggle());document.body.appendChild(b);
     const pn=document.createElement('aside');pn.id='chatPanel';pn.className='chatpanel';pn.setAttribute('aria-label','Chat del equipo');
-    pn.innerHTML='<div class="chath"><div><b>Chat del equipo</b><div class="mut small" id="chatOn">Conectando…</div></div><div class="row" style="gap:6px"><button type="button" class="btn sm" id="chatBell"></button><button type="button" class="btn sm" id="chatClr" hidden>Borrar</button><button type="button" class="btn sm" id="chatX" aria-label="Cerrar">✕</button></div></div><div class="chatl" id="chatList"></div><form class="chatf" id="chatForm"><input id="chatIn" maxlength="300" autocomplete="off" placeholder="Escribe un mensaje…"><button class="btn pri">Enviar</button></form><div class="mut small chatn">Los mensajes se borran solos a los 30 min. No se guarda nada.</div>';
+    pn.innerHTML='<div class="chath"><div><b>Chat del equipo</b><div class="mut small" id="chatOn">Conectando…</div></div><div class="row" style="gap:6px"><button type="button" class="btn sm" id="chatBell"></button><button type="button" class="btn sm" id="chatClr" hidden>Borrar</button><button type="button" class="btn sm" id="chatX" aria-label="Cerrar">✕</button></div></div><button type="button" class="chatperm" id="chatPerm" hidden></button><div class="chatl" id="chatList"></div><form class="chatf" id="chatForm"><input id="chatIn" maxlength="300" autocomplete="off" placeholder="Escribe un mensaje…"><button class="btn pri">Enviar</button></form><div class="mut small chatn">Los mensajes se borran solos a los 30 min. No se guarda nada.</div>';
     document.body.appendChild(pn);
     $('#chatX').addEventListener('click',()=>chatToggle(false));
     $('#chatBell').addEventListener('click',async()=>{chatSnd=!chatSnd;try{localStorage.setItem('spiderChatAvisos',chatSnd?'1':'0')}catch(e){}
-      if(chatSnd){chatBeep();if('Notification' in window&&Notification.permission==='default'){try{await Notification.requestPermission()}catch(e){}}}
+      if(chatSnd){chatBeep();await chatAsk()}
       chatBell();toast(chatSnd?'Avisos activados':'Avisos silenciados')});
     $('#chatClr').addEventListener('click',()=>{if(chatCh)chatCh.send({type:'broadcast',event:'clear',payload:{u:me&&me.id}})});
     $('#chatForm').addEventListener('submit',e=>{e.preventDefault();const i=$('#chatIn');chatSend(i.value);i.value='';i.focus()});
@@ -469,8 +469,46 @@ function chatToggle(open){
   const pn=$('#chatPanel');if(!pn)return;pn.classList.toggle('on',chatOpen);
   if(chatOpen){chatUnread=0;chatRender();setTimeout(()=>{const i=$('#chatIn');if(i&&innerWidth>700)i.focus()},230);
     if(chatSnd){try{chatAudio=chatAudio||new (window.AudioContext||window.webkitAudioContext)();chatAudio.resume&&chatAudio.resume()}catch(e){}
-      if('Notification' in window&&Notification.permission==='default'){try{Notification.requestPermission()}catch(e){}}}}
+      chatPerm();if('Notification' in window&&Notification.permission==='default')chatAsk()}}
   chatBadge();chatTitle();
+}
+const b64u=s=>{const p='='.repeat((4-s.length%4)%4),r=atob((s+p).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from(r,c=>c.charCodeAt(0))};
+async function chatPushOn(){
+  try{
+    if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)||Notification.permission!=='granted'||!me)return false;
+    const reg=await navigator.serviceWorker.register('sw.js');await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub){
+      const r=await sb.functions.invoke('chat-push',{body:{accion:'key'}});
+      if(r.error||!r.data||!r.data.key)return false;
+      sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64u(r.data.key)});
+    }
+    const j=sub.toJSON();
+    const q=await sb.from('push_subs').upsert({endpoint:j.endpoint,user_id:me.id,sub:j},{onConflict:'endpoint'});
+    return !q.error;
+  }catch(e){return false}
+}
+async function chatPushOff(){
+  try{
+    if(!('serviceWorker' in navigator))return;
+    const reg=await navigator.serviceWorker.getRegistration();const sub=reg&&await reg.pushManager.getSubscription();
+    if(sub){await sb.from('push_subs').delete().eq('endpoint',sub.endpoint)}
+  }catch(e){}
+}
+async function chatAsk(){
+  if(!('Notification' in window)){chatPerm();return}
+  if(Notification.permission==='default'){try{await Notification.requestPermission()}catch(e){}}
+  const ok=await chatPushOn();chatPerm();
+  if(Notification.permission==='granted')toast(ok?'Avisos activados en este dispositivo':'Avisos del navegador activados (sin push en este equipo)');
+}
+function chatPerm(){
+  const x=$('#chatPerm');if(!x)return;
+  const has='Notification' in window&&'serviceWorker' in navigator&&'PushManager' in window;
+  if(Notification&&has&&Notification.permission==='granted'){x.hidden=true;return}
+  x.hidden=false;
+  if(!has){x.innerHTML='Para recibir avisos con la app cerrada, abre el menú del navegador y elige <b>Añadir a pantalla de inicio</b>, luego abre Spider Store desde ese icono.';x.onclick=null}
+  else if(Notification.permission==='denied'){x.textContent='Los avisos están bloqueados. Actívalos en los ajustes del sitio del navegador.';x.onclick=null}
+  else{x.innerHTML='<b>Activar avisos</b> para recibir mensajes aunque la app esté cerrada';x.onclick=chatAsk}
 }
 function chatSend(txt){
   txt=String(txt||'').trim().slice(0,300);
@@ -478,12 +516,14 @@ function chatSend(txt){
   if(Date.now()-chatLast<700){toast('Más despacio 🙂');return}
   chatLast=Date.now();
   chatCh.send({type:'broadcast',event:'msg',payload:{id:chatRid(),u:me.id,n:me.nombre||me.usuario||'',r:isAdmin?'a':'v',x:txt}});
+  try{sb.functions.invoke('chat-push',{body:{accion:'enviar',x:txt}}).catch(()=>{})}catch(e){}
 }
 async function startChat(){
   stopChat();
   chatUi();
   try{
     if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+    chatPushOn().then(chatPerm);
     const ss=await sb.auth.getSession();if(ss.data&&ss.data.session&&sb.realtime&&sb.realtime.setAuth)sb.realtime.setAuth(ss.data.session.access_token);
     const ch=sb.channel('spider-chat',{config:{private:true,broadcast:{self:true,ack:false},presence:{key:me.id}}});
     chatCh=ch;
